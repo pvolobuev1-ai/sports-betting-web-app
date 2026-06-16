@@ -33,7 +33,7 @@ def get_secret(name: str, default: str = "") -> str:
 
 OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
 ODDS_API_KEY = get_secret("ODDS_API_KEY")
-OPENAI_MODEL = get_secret("OPENAI_MODEL", "gpt-5.5")
+OPENAI_MODEL = get_secret("OPENAI_MODEL", "gpt-5.4-mini")
 
 if not OPENAI_API_KEY:
     st.error("Не найден OPENAI_API_KEY. Добавь ключ OpenAI в Streamlit Secrets.")
