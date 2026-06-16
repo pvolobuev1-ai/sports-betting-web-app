@@ -17,7 +17,7 @@ st.set_page_config(
 )
 
 st.title("🏆 AI Betting Analyst")
-st.caption("Поиск коэффициентов через The Odds API + анализ ставок через OpenAI")
+st.caption("Стабильная версия: коэффициенты + локальный анализ + дополнительный AI-анализ")
 
 
 # ============================================================
@@ -31,131 +31,96 @@ def get_secret(name: str, default: str = "") -> str:
         return os.getenv(name, default)
 
 
-OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
-ODDS_API_KEY = get_secret("ODDS_API_KEY")
+OPENAI_API_KEY = get_secret("OPENAI_API_KEY", "")
+ODDS_API_KEY = get_secret("ODDS_API_KEY", "")
 OPENAI_MODEL = get_secret("OPENAI_MODEL", "gpt-5.4-mini")
-
-if not OPENAI_API_KEY:
-    st.error("Не найден OPENAI_API_KEY. Добавь ключ OpenAI в Streamlit Secrets.")
-    st.stop()
 
 if not ODDS_API_KEY:
     st.error("Не найден ODDS_API_KEY. Добавь ключ The Odds API в Streamlit Secrets.")
     st.stop()
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = None
+
+if OPENAI_API_KEY:
+    client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 # ============================================================
-# РЫНКИ СТАВОК
+# РЫНКИ
 # ============================================================
 
 MARKET_LABELS = {
-    # Основные рынки
-    "Исход матча / победитель / 1X2": "h2h",
+    "Исход матча / победитель": "h2h",
+    "Исход с ничьей / 1X2": "h2h_3_way",
+    "Двойной шанс / команда не проиграет": "double_chance",
+    "Исход без ничьей": "draw_no_bet",
     "Фора": "spreads",
     "Тотал матча": "totals",
-
-    # Исходы с учетом ничьей
-    "Исход 3-way / с ничьей": "h2h_3_way",
-    "Двойной шанс / команда не проиграет": "double_chance",
-    "Исход без ничьей / Draw No Bet": "draw_no_bet",
-
-    # Голы
-    "ОБЗ / обе команды забьют": "btts",
+    "ОБЗ / обе забьют": "btts",
     "Индивидуальные тоталы команд": "team_totals",
-    "Расширенные индивидуальные тоталы команд": "alternate_team_totals",
     "Расширенные тоталы матча": "alternate_totals",
     "Расширенные форы": "alternate_spreads",
+    "Расширенные индивидуальные тоталы": "alternate_team_totals",
 
-    # Периоды / таймы
-    "Исход 1-го тайма": "h2h_h1",
-    "Исход 2-го тайма": "h2h_h2",
-    "Исход 1-го тайма с ничьей": "h2h_3_way_h1",
-    "Исход 2-го тайма с ничьей": "h2h_3_way_h2",
-    "Фора 1-го тайма": "spreads_h1",
-    "Фора 2-го тайма": "spreads_h2",
-    "Тотал 1-го тайма": "totals_h1",
-    "Тотал 2-го тайма": "totals_h2",
-    "Индивидуальный тотал 1-го тайма": "team_totals_h1",
-    "Индивидуальный тотал 2-го тайма": "team_totals_h2",
-
-    # Футбольная статистика команд
     "Угловые — тотал": "alternate_totals_corners",
     "Угловые — фора": "alternate_spreads_corners",
-    "Жёлтые карточки / карточки — тотал": "alternate_totals_cards",
-    "Жёлтые карточки / карточки — фора": "alternate_spreads_cards",
+    "Карточки — тотал": "alternate_totals_cards",
+    "Карточки — фора": "alternate_spreads_cards",
 
-    # Игровые периоды для хоккея
+    "Тотал 1-го тайма": "totals_h1",
+    "Фора 1-го тайма": "spreads_h1",
+    "Исход 1-го тайма": "h2h_h1",
+    "Индивидуальный тотал 1-го тайма": "team_totals_h1",
+
     "Хоккей — исход 1-го периода": "h2h_p1",
-    "Хоккей — исход 2-го периода": "h2h_p2",
-    "Хоккей — исход 3-го периода": "h2h_p3",
-    "Хоккей — фора 1-го периода": "spreads_p1",
-    "Хоккей — фора 2-го периода": "spreads_p2",
-    "Хоккей — фора 3-го периода": "spreads_p3",
     "Хоккей — тотал 1-го периода": "totals_p1",
-    "Хоккей — тотал 2-го периода": "totals_p2",
-    "Хоккей — тотал 3-го периода": "totals_p3",
+    "Хоккей — фора 1-го периода": "spreads_p1",
 
-    # Игроки, если доступны в API
-    "Игрок забьёт в любое время": "player_goal_scorer_anytime",
-    "Игрок нанесёт удары": "player_shots",
-    "Игрок нанесёт удары в створ": "player_shots_on_target",
-    "Игрок получит карточку": "player_to_receive_card",
+    "Игрок — удары": "player_shots",
+    "Игрок — удары в створ": "player_shots_on_target",
+    "Игрок — гол в любое время": "player_goal_scorer_anytime",
+    "Игрок — карточка": "player_to_receive_card",
 }
 
 
-MARKET_RU_NAMES = {
-    "h2h": "Исход матча / победитель / 1X2",
-    "spreads": "Фора",
-    "totals": "Тотал матча",
-    "h2h_3_way": "Исход 3-way / с ничьей",
+MARKET_NAMES_RU = {
+    "h2h": "Исход матча / победитель",
+    "h2h_3_way": "Исход с ничьей / 1X2",
     "double_chance": "Двойной шанс",
     "draw_no_bet": "Исход без ничьей",
+    "spreads": "Фора",
+    "totals": "Тотал матча",
     "btts": "Обе забьют",
     "team_totals": "Индивидуальные тоталы команд",
-    "alternate_team_totals": "Расширенные индивидуальные тоталы команд",
-    "alternate_totals": "Расширенные тоталы",
+    "alternate_totals": "Расширенные тоталы матча",
     "alternate_spreads": "Расширенные форы",
-    "h2h_h1": "Исход 1-го тайма",
-    "h2h_h2": "Исход 2-го тайма",
-    "h2h_3_way_h1": "Исход 1-го тайма с ничьей",
-    "h2h_3_way_h2": "Исход 2-го тайма с ничьей",
-    "spreads_h1": "Фора 1-го тайма",
-    "spreads_h2": "Фора 2-го тайма",
-    "totals_h1": "Тотал 1-го тайма",
-    "totals_h2": "Тотал 2-го тайма",
-    "team_totals_h1": "Индивидуальный тотал 1-го тайма",
-    "team_totals_h2": "Индивидуальный тотал 2-го тайма",
+    "alternate_team_totals": "Расширенные индивидуальные тоталы",
     "alternate_totals_corners": "Угловые — тотал",
     "alternate_spreads_corners": "Угловые — фора",
     "alternate_totals_cards": "Карточки — тотал",
     "alternate_spreads_cards": "Карточки — фора",
+    "totals_h1": "Тотал 1-го тайма",
+    "spreads_h1": "Фора 1-го тайма",
+    "h2h_h1": "Исход 1-го тайма",
+    "team_totals_h1": "Индивидуальный тотал 1-го тайма",
     "h2h_p1": "Хоккей — исход 1-го периода",
-    "h2h_p2": "Хоккей — исход 2-го периода",
-    "h2h_p3": "Хоккей — исход 3-го периода",
-    "spreads_p1": "Хоккей — фора 1-го периода",
-    "spreads_p2": "Хоккей — фора 2-го периода",
-    "spreads_p3": "Хоккей — фора 3-го периода",
     "totals_p1": "Хоккей — тотал 1-го периода",
-    "totals_p2": "Хоккей — тотал 2-го периода",
-    "totals_p3": "Хоккей — тотал 3-го периода",
-    "player_goal_scorer_anytime": "Игрок забьёт в любое время",
-    "player_shots": "Игрок нанесёт удары",
-    "player_shots_on_target": "Игрок нанесёт удары в створ",
-    "player_to_receive_card": "Игрок получит карточку",
+    "spreads_p1": "Хоккей — фора 1-го периода",
+    "player_shots": "Игрок — удары",
+    "player_shots_on_target": "Игрок — удары в створ",
+    "player_goal_scorer_anytime": "Игрок — гол в любое время",
+    "player_to_receive_card": "Игрок — карточка",
 }
 
 
 DEFAULT_MARKETS = [
-    "Исход матча / победитель / 1X2",
+    "Исход матча / победитель",
     "Фора",
     "Тотал матча",
+    "ОБЗ / обе забьют",
     "Двойной шанс / команда не проиграет",
-    "ОБЗ / обе команды забьют",
+    "Исход без ничьей",
     "Индивидуальные тоталы команд",
-    "Угловые — тотал",
-    "Жёлтые карточки / карточки — тотал",
 ]
 
 
@@ -173,9 +138,7 @@ def fetch_sports():
     response = requests.get(url, params=params, timeout=30)
 
     if response.status_code != 200:
-        raise Exception(
-            f"Ошибка загрузки видов спорта: {response.status_code} — {response.text}"
-        )
+        raise Exception(f"Ошибка загрузки видов спорта: {response.status_code} — {response.text}")
 
     return response.json()
 
@@ -191,20 +154,18 @@ def fetch_events(sport_key: str):
     response = requests.get(url, params=params, timeout=30)
 
     if response.status_code != 200:
-        raise Exception(
-            f"Ошибка загрузки событий: {response.status_code} — {response.text}"
-        )
+        raise Exception(f"Ошибка загрузки событий: {response.status_code} — {response.text}")
 
     return response.json()
 
 
 @st.cache_data(ttl=120)
-def fetch_event_odds(sport_key: str, event_id: str, regions: str, markets: str):
+def fetch_event_odds(sport_key: str, event_id: str, regions: str, market_key: str):
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event_id}/odds"
     params = {
         "apiKey": ODDS_API_KEY,
         "regions": regions,
-        "markets": markets,
+        "markets": market_key,
         "oddsFormat": "decimal",
         "dateFormat": "iso"
     }
@@ -212,18 +173,12 @@ def fetch_event_odds(sport_key: str, event_id: str, regions: str, markets: str):
     response = requests.get(url, params=params, timeout=30)
 
     if response.status_code != 200:
-        raise Exception(
-            f"Ошибка загрузки коэффициентов: {response.status_code} — {response.text}"
-        )
+        raise Exception(f"{response.status_code} — {response.text}")
 
     return response.json()
 
 
 def merge_event_odds(target_event: dict, source_event: dict):
-    """
-    Объединяет рынки букмекеров в одном событии.
-    Нужно для ситуации, когда часть рынков грузится отдельно.
-    """
     if not source_event:
         return target_event
 
@@ -264,74 +219,50 @@ def merge_event_odds(target_event: dict, source_event: dict):
     return target_event
 
 
-def load_event_with_markets(sport_key: str, event: dict, regions: str, market_keys: list[str]):
-    """
-    Сначала пробует загрузить все рынки одним запросом.
-    Если API ругается на один из рынков, пробует загрузить рынки по одному и пропустить недоступные.
-    """
+def load_event_with_markets(sport_key: str, event: dict, regions: str, market_keys: list):
     event_id = event.get("id")
+
+    combined_event = {
+        "id": event.get("id"),
+        "sport_key": event.get("sport_key"),
+        "sport_title": event.get("sport_title"),
+        "commence_time": event.get("commence_time"),
+        "home_team": event.get("home_team"),
+        "away_team": event.get("away_team"),
+        "bookmakers": []
+    }
+
     warnings = []
 
     if not event_id:
-        return None, ["У события нет ID."]
-
-    market_string = ",".join(market_keys)
-
-    try:
-        loaded_event = fetch_event_odds(
-            sport_key=sport_key,
-            event_id=event_id,
-            regions=regions,
-            markets=market_string
-        )
-        return loaded_event, warnings
-
-    except Exception as full_error:
-        warnings.append(
-            f"Не удалось загрузить все рынки одним запросом для матча "
-            f"{event.get('home_team')} — {event.get('away_team')}. "
-            f"Пробую рынки по одному."
-        )
-
-        combined_event = {
-            "id": event.get("id"),
-            "sport_key": event.get("sport_key"),
-            "sport_title": event.get("sport_title"),
-            "commence_time": event.get("commence_time"),
-            "home_team": event.get("home_team"),
-            "away_team": event.get("away_team"),
-            "bookmakers": []
-        }
-
-        for market_key in market_keys:
-            try:
-                one_market_event = fetch_event_odds(
-                    sport_key=sport_key,
-                    event_id=event_id,
-                    regions=regions,
-                    markets=market_key
-                )
-                combined_event = merge_event_odds(combined_event, one_market_event)
-
-            except Exception:
-                warnings.append(
-                    f"Рынок `{market_key}` недоступен для матча "
-                    f"{event.get('home_team')} — {event.get('away_team')}."
-                )
-
+        warnings.append("У события нет ID.")
         return combined_event, warnings
 
+    for market_key in market_keys:
+        try:
+            one_market_event = fetch_event_odds(
+                sport_key=sport_key,
+                event_id=event_id,
+                regions=regions,
+                market_key=market_key
+            )
 
-def count_markets(event: dict) -> int:
-    total = 0
+            combined_event = merge_event_odds(combined_event, one_market_event)
 
-    for bookmaker in event.get("bookmakers", []):
-        total += len(bookmaker.get("markets", []))
+        except Exception:
+            warnings.append(
+                f"Рынок `{market_key}` недоступен для матча "
+                f"{event.get('home_team')} — {event.get('away_team')}."
+            )
 
-    return total
+    return combined_event, warnings
 
 
-def extract_bookmakers(events: list[dict]):
+# ============================================================
+# ПРЕОБРАЗОВАНИЕ ДАННЫХ
+# ============================================================
+
+def extract_bookmakers(events: list):
     bookmakers = set()
 
     for event in events:
@@ -343,61 +274,16 @@ def extract_bookmakers(events: list[dict]):
     return sorted(bookmakers)
 
 
-def build_events_text(events: list[dict], bookmaker_choice: str):
-    parts = []
+def count_markets(event: dict):
+    total = 0
 
-    for event in events:
-        home_team = event.get("home_team", "Неизвестно")
-        away_team = event.get("away_team", "Неизвестно")
-        commence_time = event.get("commence_time", "Время не указано")
+    for bookmaker in event.get("bookmakers", []):
+        total += len(bookmaker.get("markets", []))
 
-        parts.append("")
-        parts.append("=" * 70)
-        parts.append(f"Матч: {home_team} — {away_team}")
-        parts.append(f"Время начала: {commence_time}")
-
-        for bookmaker in event.get("bookmakers", []):
-            bookmaker_title = bookmaker.get("title", "Букмекер не указан")
-
-            if bookmaker_choice != "Все" and bookmaker_title != bookmaker_choice:
-                continue
-
-            parts.append("")
-            parts.append(f"Букмекер: {bookmaker_title}")
-
-            for market in bookmaker.get("markets", []):
-                market_key = market.get("key", "unknown")
-                market_name = MARKET_RU_NAMES.get(market_key, market_key)
-                last_update = market.get("last_update")
-
-                parts.append("")
-                parts.append(f"Рынок: {market_name} ({market_key})")
-
-                if last_update:
-                    parts.append(f"Обновлено: {last_update}")
-
-                for outcome in market.get("outcomes", []):
-                    name = outcome.get("name", "исход")
-                    price = outcome.get("price", "нет коэффициента")
-                    point = outcome.get("point")
-                    description = outcome.get("description")
-
-                    line = f"- {name}"
-
-                    if description:
-                        line += f" | {description}"
-
-                    if point is not None:
-                        line += f" {point}"
-
-                    line += f": {price}"
-
-                    parts.append(line)
-
-    return "\n".join(parts)
+    return total
 
 
-def make_preview_table(events: list[dict]):
+def make_preview_table(events: list):
     rows = []
 
     for event in events:
@@ -409,6 +295,69 @@ def make_preview_table(events: list[dict]):
         })
 
     return pd.DataFrame(rows)
+
+
+def flatten_odds(events: list, bookmaker_choice: str):
+    rows = []
+
+    for event in events:
+        home_team = event.get("home_team", "")
+        away_team = event.get("away_team", "")
+        match_name = f"{home_team} — {away_team}"
+        commence_time = event.get("commence_time", "")
+
+        for bookmaker in event.get("bookmakers", []):
+            bookmaker_title = bookmaker.get("title", "")
+
+            if bookmaker_choice != "Все" and bookmaker_title != bookmaker_choice:
+                continue
+
+            for market in bookmaker.get("markets", []):
+                market_key = market.get("key", "")
+                market_name = MARKET_NAMES_RU.get(market_key, market_key)
+
+                for outcome in market.get("outcomes", []):
+                    price = outcome.get("price")
+                    point = outcome.get("point")
+                    name = outcome.get("name", "")
+                    description = outcome.get("description", "")
+
+                    if price is None:
+                        continue
+
+                    try:
+                        price = float(price)
+                    except Exception:
+                        continue
+
+                    rows.append({
+                        "match": match_name,
+                        "time": commence_time,
+                        "bookmaker": bookmaker_title,
+                        "market_key": market_key,
+                        "market": market_name,
+                        "outcome": name,
+                        "description": description,
+                        "point": point,
+                        "odds": price
+                    })
+
+    return pd.DataFrame(rows)
+
+
+def format_bet_name(row):
+    desc = row.get("description", "")
+    point = row.get("point", None)
+
+    text = f"{row['outcome']}"
+
+    if desc:
+        text += f" | {desc}"
+
+    if pd.notna(point):
+        text += f" {point}"
+
+    return text
 
 
 # ============================================================
@@ -435,181 +384,302 @@ def get_bankroll_plan(bankroll: float, risk_mode: str):
     }
 
 
+def stake_for_score(score: float, bankroll_plan: dict):
+    if score >= 8:
+        return bankroll_plan["single_high"], "повышенный"
+    if score >= 6:
+        return bankroll_plan["single_medium"], "средний"
+    return bankroll_plan["single_low"], "низкий"
+
+
 # ============================================================
-# OPENAI АНАЛИЗ
+# ЛОКАЛЬНЫЙ АНАЛИЗ БЕЗ OPENAI
 # ============================================================
 
-def analyze_with_openai(
-    bankroll: float,
-    risk_mode: str,
-    sport_title: str,
-    bookmaker_choice: str,
-    odds_text: str,
-    selected_market_keys: list[str]
-):
+def score_market(row):
+    odds = row["odds"]
+    market_key = row["market_key"]
+
+    score = 0
+
+    if 1.45 <= odds <= 1.75:
+        score += 5
+    elif 1.76 <= odds <= 2.05:
+        score += 4
+    elif 1.30 <= odds < 1.45:
+        score += 2
+    elif 2.06 <= odds <= 2.40:
+        score += 2
+    else:
+        score -= 2
+
+    safer_markets = [
+        "double_chance",
+        "draw_no_bet",
+        "team_totals",
+        "totals",
+        "spreads",
+        "btts"
+    ]
+
+    stat_markets = [
+        "alternate_totals_corners",
+        "alternate_spreads_corners",
+        "alternate_totals_cards",
+        "alternate_spreads_cards"
+    ]
+
+    if market_key in safer_markets:
+        score += 3
+
+    if market_key in stat_markets:
+        score += 2
+
+    if "alternate" in market_key:
+        score += 1
+
+    return score
+
+
+def local_analysis(df: pd.DataFrame, bankroll: float, risk_mode: str):
     bankroll_plan = get_bankroll_plan(bankroll, risk_mode)
 
-    # Чтобы запрос не был слишком огромным
-    odds_text = odds_text[:18000]
+    if df.empty:
+        return "Нет коэффициентов для анализа."
+
+    work = df.copy()
+    work["score"] = work.apply(score_market, axis=1)
+
+    # Фильтр: не берём слишком низкие и слишком высокие коэффициенты
+    work = work[
+        (work["odds"] >= 1.30) &
+        (work["odds"] <= 2.40)
+    ]
+
+    if work.empty:
+        return "После фильтрации не осталось подходящих коэффициентов."
+
+    work = work.sort_values(
+        by=["score", "odds"],
+        ascending=[False, True]
+    )
+
+    singles = []
+    used_matches = set()
+    used_market_groups = set()
+
+    for _, row in work.iterrows():
+        match_name = row["match"]
+        market_key = row["market_key"]
+
+        # Не берём слишком много ставок из одного матча
+        if match_name in used_matches:
+            continue
+
+        # Разнообразим рынки
+        group_key = market_key.replace("alternate_", "")
+
+        if group_key in used_market_groups and len(singles) >= 3:
+            continue
+
+        score = row["score"]
+
+        if score < 4:
+            continue
+
+        stake, risk = stake_for_score(score, bankroll_plan)
+
+        singles.append({
+            "match": match_name,
+            "market": row["market"],
+            "bet": format_bet_name(row),
+            "odds": row["odds"],
+            "stake": stake,
+            "risk": risk,
+            "score": score,
+            "bookmaker": row["bookmaker"]
+        })
+
+        used_matches.add(match_name)
+        used_market_groups.add(group_key)
+
+        if len(singles) >= 5:
+            break
+
+    # Экспресс: только 2 события, не больше
+    express_candidates = []
+
+    for _, row in work.iterrows():
+        if 1.35 <= row["odds"] <= 1.75 and row["score"] >= 5:
+            if row["match"] not in [item["match"] for item in express_candidates]:
+                express_candidates.append({
+                    "match": row["match"],
+                    "market": row["market"],
+                    "bet": format_bet_name(row),
+                    "odds": row["odds"]
+                })
+
+        if len(express_candidates) >= 2:
+            break
+
+    total_single_stake = sum(item["stake"] for item in singles)
+    express_stake = bankroll_plan["express"] if len(express_candidates) >= 2 else 0
+    total_risk = total_single_stake + express_stake
+    total_risk_percent = round((total_risk / bankroll) * 100, 2)
+
+    lines = []
+
+    lines.append("# ✅ Локальный анализ")
+    lines.append("")
+    lines.append(f"Банк: **{bankroll}**")
+    lines.append(f"Режим риска: **{risk_mode}**")
+    lines.append(f"Лимит риска на день: **{bankroll_plan['daily_limit']}**")
+    lines.append("")
+
+    lines.append("## Рекомендуемые ординары")
+    lines.append("")
+
+    if not singles:
+        lines.append("Подходящих ординаров не найдено. Лучше пропустить линию или выбрать меньше рискованные рынки.")
+    else:
+        for index, bet in enumerate(singles, start=1):
+            lines.append(f"### {index}. {bet['match']}")
+            lines.append(f"- Букмекер: **{bet['bookmaker']}**")
+            lines.append(f"- Рынок: **{bet['market']}**")
+            lines.append(f"- Ставка: **{bet['bet']}**")
+            lines.append(f"- Коэффициент: **{bet['odds']}**")
+            lines.append(f"- Сумма: **{bet['stake']}**")
+            lines.append(f"- Риск: **{bet['risk']}**")
+            lines.append(f"- Оценка алгоритма: **{bet['score']}/10**")
+            lines.append("")
+
+    lines.append("## Экспресс")
+    lines.append("")
+
+    if len(express_candidates) >= 2:
+        total_odds = 1
+
+        for item in express_candidates:
+            total_odds *= item["odds"]
+
+        total_odds = round(total_odds, 2)
+
+        lines.append(f"Сумма экспресса: **{express_stake}**")
+        lines.append(f"Примерный общий коэффициент: **{total_odds}**")
+        lines.append("")
+
+        for item in express_candidates:
+            lines.append(f"- **{item['match']}** — {item['market']} — {item['bet']} за {item['odds']}")
+
+        lines.append("")
+        lines.append("Экспресс лучше держать маленьким, потому что даже 2 события сильно повышают риск.")
+    else:
+        lines.append("Экспресс лучше не собирать: недостаточно подходящих событий с умеренным коэффициентом.")
+
+    lines.append("")
+    lines.append("## Что лучше пропустить")
+    lines.append("")
+    lines.append("- Коэффициенты ниже 1.30: слишком маленькая отдача.")
+    lines.append("- Коэффициенты выше 2.40: слишком высокий риск для основной стратегии.")
+    lines.append("- Несколько ставок на один и тот же матч.")
+    lines.append("- Рынки, которых нет в загруженной линии.")
+    lines.append("")
+
+    lines.append("## Общий риск на день")
+    lines.append("")
+    lines.append(f"Общая сумма ставок: **{round(total_risk, 2)}**")
+    lines.append(f"Это примерно **{total_risk_percent}%** от банка.")
+    lines.append("")
+
+    if total_risk > bankroll_plan["daily_limit"]:
+        lines.append("⚠️ Общий риск выше лимита. Лучше уменьшить суммы ставок.")
+    else:
+        lines.append("✅ Общий риск находится в пределах выбранного режима.")
+
+    lines.append("")
+    lines.append("## Важно")
+    lines.append("")
+    lines.append("Это не гарантия прибыли. Алгоритм отбирает рынки по коэффициентам и риску, но не знает составы, травмы и мотивацию команд.")
+
+    return "\n".join(lines)
+
+
+# ============================================================
+# AI-АНАЛИЗ, КОТОРЫЙ НЕ ЛОМАЕТ ПРИЛОЖЕНИЕ
+# ============================================================
+
+def ai_analysis_safe(df: pd.DataFrame, bankroll: float, risk_mode: str):
+    if client is None:
+        return "OpenAI API key не найден. AI-анализ отключён."
+
+    if df.empty:
+        return "Нет данных для AI-анализа."
+
+    sample = df.copy()
+    sample["bet"] = sample.apply(format_bet_name, axis=1)
+    sample["score"] = sample.apply(score_market, axis=1)
+
+    sample = sample[
+        (sample["odds"] >= 1.30) &
+        (sample["odds"] <= 2.40)
+    ]
+
+    sample = sample.sort_values(
+        by=["score", "odds"],
+        ascending=[False, True]
+    ).head(40)
+
+    text_rows = []
+
+    for _, row in sample.iterrows():
+        text_rows.append(
+            f"{row['match']} | {row['bookmaker']} | {row['market']} | "
+            f"{row['bet']} | {row['odds']}"
+        )
+
+    odds_text = "\n".join(text_rows)
 
     prompt = f"""
-Ты спортивный аналитик для веб-приложения по анализу ставок.
+Проанализируй список ставок. Не придумывай новые матчи, рынки и коэффициенты.
 
-ТВОЯ ЗАДАЧА:
-Проанализировать только те матчи, рынки и коэффициенты, которые переданы ниже.
-Нужно предложить ставки с контролем риска по банку пользователя.
-
-ВАЖНЫЕ ПРАВИЛА:
-1. Используй только переданные матчи.
-2. Используй только переданные рынки.
-3. Используй только переданные коэффициенты.
-4. Не придумывай матчи.
-5. Не придумывай коэффициенты.
-6. Не добавляй рынки, которых нет во входных данных.
-7. Не обещай гарантированную прибыль.
-8. Основной упор делай на ординары.
-9. Экспресс предлагай только если есть 2–3 логичных события.
-10. Минимальный желательный коэффициент — от 1.45.
-11. Не советуй ставить весь банк.
-12. Не превышай общий риск на день.
-13. Если данных мало, честно напиши, что ставка рискованная.
-
-ОСОБО ВАЖНО:
-- Можно анализировать не только исходы, форы и тоталы.
-- Обязательно рассматривай ОБЗ, двойной шанс, исход без ничьей, индивидуальные тоталы команд, угловые, карточки и другие рынки, если они есть во входных данных.
-- Комбо "исход + тотал" можно предложить только как осторожный вариант, если в данных есть оба отдельных рынка. Если готового коэффициента на комбо нет, не выдавай его как точный букмекерский коэффициент.
-- Ставки на угловые и карточки анализируй отдельно от ставок на голы.
-- Если рынок по ударам, ударам в створ, аутам или фолам отсутствует во входных данных, прямо напиши, что линия по этому показателю не была найдена.
-
-ДАННЫЕ ПОЛЬЗОВАТЕЛЯ:
 Банк: {bankroll}
 Режим риска: {risk_mode}
-Спорт: {sport_title}
-Букмекер: {bookmaker_choice}
-Выбранные рынки: {", ".join(selected_market_keys)}
 
-ЛИМИТЫ ПО БАНКУ:
-Лимит риска на день: {bankroll_plan["daily_limit"]}
-Низкая ставка: {bankroll_plan["single_low"]}
-Средняя ставка: {bankroll_plan["single_medium"]}
-Высокая ставка: {bankroll_plan["single_high"]}
-Экспресс: {bankroll_plan["express"]}
-
-ДАННЫЕ КОЭФФИЦИЕНТОВ:
+Доступные варианты:
 {odds_text}
 
-Ответ дай строго на русском языке.
+Нужно:
+1. Выбрать 2–5 лучших ординаров.
+2. Дать маленький экспресс только если он оправдан.
+3. Указать суммы ставок от банка.
+4. Объяснить риск.
+5. Отдельно отметить рынки: исходы, тоталы, форы, ОБЗ, индивидуальные тоталы, угловые, карточки.
+6. Не обещать гарантированную прибыль.
 
-Структура ответа:
-
-# Краткая оценка линии
-
-Оцени, насколько линия подходит для ставок.
-
-# Лучшие ординары
-
-Дай 2–5 вариантов.
-Для каждого варианта укажи:
-
-- Матч:
-- Рынок:
-- Коэффициент:
-- Сумма ставки:
-- Риск:
-- Уверенность от 1 до 10:
-- Объяснение:
-
-# Ставки на голы
-
-Отдельно оцени:
-- тоталы;
-- индивидуальные тоталы;
-- ОБЗ.
-
-# Исходы и защита от ничьей
-
-Отдельно оцени:
-- победа;
-- двойной шанс;
-- исход без ничьей;
-- исход с учётом форы.
-
-# Статистика команд
-
-Отдельно оцени, если есть в линии:
-- угловые;
-- карточки;
-- удары;
-- удары в створ;
-- ауты;
-- фолы.
-
-Если какого-то показателя нет во входных данных, прямо напиши: "линия не найдена".
-
-# Комбо: исход + тотал
-
-Предложи только если это логично.
-Если нет готового коэффициента, напиши, что это не точная линия букмекера, а ориентир.
-
-# Экспресс
-
-Напиши:
-- стоит ли собирать экспресс;
-- события;
-- общий коэффициент;
-- сумма;
-- риск;
-- объяснение.
-
-# Что лучше пропустить
-
-Перечисли рискованные матчи или рынки.
-
-# Общий риск на день
-
-Посчитай примерную сумму всех ставок и процент от банка.
-
-# Итог
-
-Дай короткий вывод: как лучше сыграть сегодня.
-
-# Предупреждение
-
-Кратко напомни, что ставки несут риск и не гарантируют прибыль.
+Ответ дай на русском языке.
 """
 
     try:
         response = client.responses.create(
             model=OPENAI_MODEL,
-            reasoning={"effort": "low"},
-            input=prompt
+            input=prompt,
+            max_output_tokens=1200
         )
 
         return response.output_text
 
     except Exception as e:
-        return f"""
-# Ошибка при обращении к OpenAI
-
-Техническая ошибка:
-
-`{e}`
-
-Что сделать:
-
-1. Нажми кнопку анализа ещё раз через 1–2 минуты.
-2. Уменьши количество матчей до 2–3.
-3. Уменьши количество выбранных рынков.
-4. Проверь, что в Streamlit Secrets правильно добавлен `OPENAI_API_KEY`.
-5. Проверь, что в OpenAI Platform есть активный биллинг.
-"""
+        return (
+            "AI-анализ временно не сработал, но локальный анализ выше остаётся рабочим.\n\n"
+            f"Техническая ошибка OpenAI: `{e}`"
+        )
 
 
 # ============================================================
 # БОКОВАЯ ПАНЕЛЬ
 # ============================================================
 
-st.sidebar.header("⚙️ Настройки анализа")
+st.sidebar.header("⚙️ Настройки")
 
 bankroll = st.sidebar.number_input(
     "Банк",
@@ -634,13 +704,18 @@ regions = st.sidebar.selectbox(
 max_events = st.sidebar.slider(
     "Сколько матчей загружать",
     min_value=1,
-    max_value=10,
-    value=3
+    max_value=8,
+    value=2
+)
+
+use_ai = st.sidebar.checkbox(
+    "Добавить AI-анализ OpenAI",
+    value=False
 )
 
 st.sidebar.divider()
 
-st.sidebar.subheader("🎯 Рынки для поиска")
+st.sidebar.subheader("🎯 Рынки")
 
 selected_market_labels = st.sidebar.multiselect(
     "Выбери рынки",
@@ -649,12 +724,9 @@ selected_market_labels = st.sidebar.multiselect(
 )
 
 custom_markets_input = st.sidebar.text_area(
-    "Дополнительные market keys вручную",
-    placeholder="Например: totals_fouls,spreads_throw_ins",
-    help=(
-        "Используй это поле, если знаешь точные market keys из своего odds API. "
-        "Если ключ не поддерживается The Odds API, приложение просто пропустит этот рынок."
-    )
+    "Дополнительные market keys",
+    placeholder="Например: totals_fouls,spreads_throw_ins,total_shots",
+    help="Если The Odds API не поддерживает ключ, приложение просто пропустит этот рынок."
 )
 
 selected_market_keys = [
@@ -671,7 +743,6 @@ if custom_markets_input.strip():
 
     selected_market_keys.extend(custom_keys)
 
-# Убираем дубликаты
 selected_market_keys = list(dict.fromkeys(selected_market_keys))
 
 st.sidebar.divider()
@@ -718,7 +789,6 @@ selected_sport_label = st.selectbox(
 )
 
 selected_sport_key = sport_options[selected_sport_label]
-selected_sport_title = selected_sport_label.split(" — ")[0]
 
 
 if "loaded_events" not in st.session_state:
@@ -728,11 +798,11 @@ if "load_warnings" not in st.session_state:
     st.session_state.load_warnings = []
 
 
-st.subheader("2. Загрузи события и коэффициенты")
+st.subheader("2. Загрузи коэффициенты")
 
 st.info(
-    "Дополнительные рынки могут расходовать больше лимита The Odds API, "
-    "потому что приложение загружает коэффициенты отдельно по каждому матчу."
+    "Сначала лучше загружать 1–2 матча и 5–7 рынков. "
+    "Если выбрать слишком много рынков, быстрее расходуется лимит The Odds API."
 )
 
 if st.button("🔎 Загрузить коэффициенты"):
@@ -756,7 +826,7 @@ if st.button("🔎 Загрузить коэффициенты"):
                     market_keys=selected_market_keys
                 )
 
-                if loaded_event:
+                if loaded_event and count_markets(loaded_event) > 0:
                     loaded_events.append(loaded_event)
 
                 load_warnings.extend(warnings)
@@ -767,9 +837,9 @@ if st.button("🔎 Загрузить коэффициенты"):
             st.session_state.load_warnings = load_warnings
 
             if not loaded_events:
-                st.warning("События не найдены. Попробуй другой спорт, регион или рынки.")
+                st.warning("Коэффициенты не найдены. Попробуй другой спорт, регион или меньше рынков.")
             else:
-                st.success(f"Загружено событий: {len(loaded_events)}")
+                st.success(f"Загружено событий с коэффициентами: {len(loaded_events)}")
 
         except Exception as e:
             st.error(str(e))
@@ -780,8 +850,8 @@ load_warnings = st.session_state.load_warnings
 
 
 if load_warnings:
-    with st.expander("Предупреждения по загрузке рынков"):
-        for warning in load_warnings[:50]:
+    with st.expander("Предупреждения по рынкам"):
+        for warning in load_warnings[:100]:
             st.write(f"- {warning}")
 
 
@@ -791,10 +861,7 @@ if events:
     bookmakers = extract_bookmakers(events)
 
     if not bookmakers:
-        st.warning(
-            "Букмекеры или рынки не найдены. "
-            "Попробуй выбрать меньше рынков или другой регион."
-        )
+        st.warning("Букмекеры не найдены. Попробуй другой спорт или регион.")
         st.stop()
 
     bookmaker_choice = st.selectbox(
@@ -805,43 +872,61 @@ if events:
     st.subheader("4. Найденные события")
 
     preview_df = make_preview_table(events)
+    st.dataframe(preview_df, use_container_width=True)
 
-    st.dataframe(
-        preview_df,
-        use_container_width=True
-    )
+    df = flatten_odds(events, bookmaker_choice)
 
-    odds_text = build_events_text(
-        events=events,
-        bookmaker_choice=bookmaker_choice
-    )
+    st.subheader("5. Найденные рынки")
 
-    with st.expander("Показать коэффициенты, которые будут отправлены на анализ"):
-        st.text(odds_text)
+    if df.empty:
+        st.warning("Для выбранного букмекера нет рынков. Выбери другого букмекера или вариант «Все».")
+    else:
+        show_df = df.copy()
+        show_df["Ставка"] = show_df.apply(format_bet_name, axis=1)
 
-    st.subheader("5. Запусти AI-анализ")
+        show_df = show_df[
+            [
+                "match",
+                "bookmaker",
+                "market",
+                "Ставка",
+                "odds"
+            ]
+        ]
 
-    st.write(
-        "Для стабильной работы лучше начинать с 2–3 матчей и 5–8 рынков. "
-        "Если всё работает, можно увеличивать количество."
-    )
+        show_df.columns = [
+            "Матч",
+            "Букмекер",
+            "Рынок",
+            "Ставка",
+            "Коэффициент"
+        ]
 
-    if st.button("🧠 Проанализировать и предложить ставки"):
-        if not odds_text.strip():
-            st.warning("Нет данных для анализа. Попробуй выбрать другого букмекера или меньше рынков.")
-        else:
-            with st.spinner("Анализирую матчи, коэффициенты, статистические рынки и риск по банку..."):
-                analysis = analyze_with_openai(
-                    bankroll=bankroll,
-                    risk_mode=risk_mode,
-                    sport_title=selected_sport_title,
-                    bookmaker_choice=bookmaker_choice,
-                    odds_text=odds_text,
-                    selected_market_keys=selected_market_keys
-                )
+        st.dataframe(show_df, use_container_width=True)
 
-                st.subheader("✅ Результат анализа")
-                st.markdown(analysis)
+        st.subheader("6. Анализ ставок")
+
+        if st.button("🧠 Проанализировать"):
+            local_result = local_analysis(
+                df=df,
+                bankroll=bankroll,
+                risk_mode=risk_mode
+            )
+
+            st.markdown(local_result)
+
+            if use_ai:
+                st.divider()
+                st.subheader("Дополнительный AI-анализ")
+
+                with st.spinner("Пробую получить AI-анализ..."):
+                    ai_result = ai_analysis_safe(
+                        df=df,
+                        bankroll=bankroll,
+                        risk_mode=risk_mode
+                    )
+
+                st.markdown(ai_result)
 
 else:
     st.info("Сначала выбери спорт и нажми «Загрузить коэффициенты».")
@@ -854,6 +939,7 @@ else:
 st.divider()
 
 st.caption(
-    "Приложение не гарантирует прибыль. Коэффициенты загружаются из внешнего odds API. "
-    "Если нужного рынка или букмекера нет в API, приложение не сможет честно использовать эту линию."
+    "Приложение не гарантирует прибыль. Локальный анализ оценивает коэффициенты и риск, "
+    "но не учитывает составы, травмы, мотивацию и новости. "
+    "Если нужного рынка нет в The Odds API, приложение не сможет получить его автоматически."
 )
